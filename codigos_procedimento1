@@ -1,0 +1,133 @@
+1. Implementação do Servidor CadastroServer
+1.1 Criação da Camada de Persistência:
+
+Pacote model:
+As entidades foram geradas a partir das tabelas do banco de dados SQL Server utilizando a opção New > Entity Classes from Database.
+A biblioteca Eclipse Link (JPA 2.1) foi adicionada ao projeto, assim como o arquivo jar do conector JDBC para SQL Server.
+
+1.2 Criação da Camada de Controle:
+
+Pacote controller:
+A classe UsuarioJpaController foi gerada utilizando New > JPA Controller Classes from Entity Classes.
+Adicionado o método findUsuario na classe UsuarioJpaController para verificar o login e a senha de um usuário:
+
+public Usuario findUsuario(String login, String senha) {
+    EntityManager em = getEntityManager();
+    try {
+        return em.createQuery("SELECT u FROM Usuario u WHERE u.login = :login AND u.senha = :senha", Usuario.class)
+                 .setParameter("login", login)
+                 .setParameter("senha", senha)
+                 .getSingleResult();
+    } catch (NoResultException e) {
+        return null;
+    } finally {
+        em.close();
+    }
+}
+
+
+1.3 Implementação da CadastroThread:
+
+Pacote cadastroserver:
+Criada a classe CadastroThread para gerenciar a comunicação entre o servidor e os clientes.
+
+public class CadastroThread extends Thread {
+    private ProdutoJpaController ctrl;
+    private UsuarioJpaController ctrlUsu;
+    private Socket s1;
+
+    public CadastroThread(ProdutoJpaController ctrl, UsuarioJpaController ctrlUsu, Socket s1) {
+        this.ctrl = ctrl;
+        this.ctrlUsu = ctrlUsu;
+        this.s1 = s1;
+    }
+
+    @Override
+    public void run() {
+        try (ObjectOutputStream out = new ObjectOutputStream(s1.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(s1.getInputStream())) {
+             
+             // Recebe login e senha do cliente
+             String login = in.readUTF();
+             String senha = in.readUTF();
+             
+             // Verifica credenciais
+             Usuario usuario = ctrlUsu.findUsuario(login, senha);
+             if (usuario == null) {
+                 s1.close();
+                 return;
+             }
+
+             // Ciclo de resposta
+             while (true) {
+                 String comando = in.readUTF();
+                 if ("L".equals(comando)) {
+                     List<Produto> produtos = ctrl.findProdutoEntities();
+                     out.writeObject(produtos);
+                     out.flush();
+                 }
+             }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+1.4 Implementação da Classe main:
+
+Classe CadastroServer:
+
+public class CadastroServer {
+    public static void main(String[] args) {
+        EntityManagerFactory emf = Persistence.createEntityManagerFactory("CadastroServerPU");
+        ProdutoJpaController ctrl = new ProdutoJpaController(emf);
+        UsuarioJpaController ctrlUsu = new UsuarioJpaController(emf);
+
+        try (ServerSocket serverSocket = new ServerSocket(4321)) {
+            while (true) {
+                Socket clientSocket = serverSocket.accept();
+                CadastroThread thread = new CadastroThread(ctrl, ctrlUsu, clientSocket);
+                thread.start();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+2. Implementação do Cliente CadastroClient
+Classe CadastroClient:
+
+public class CadastroClient {
+    public static void main(String[] args) {
+        try (Socket socket = new Socket("localhost", 4321);
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+             
+             // Envia login e senha
+             out.writeUTF("op1");
+             out.writeUTF("op1");
+             out.flush();
+
+             // Envia comando L
+             out.writeUTF("L");
+             out.flush();
+
+             // Recebe e apresenta a lista de produtos
+             List<Produto> produtos = (List<Produto>) in.readObject();
+             for (Produto produto : produtos) {
+                 System.out.println(produto.getNome());
+             }
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+Configuração do Projeto CadastroClient:
+
+O pacote model foi copiado do projeto CadastroServer para o projeto CadastroClient.
+A biblioteca Eclipse Link (JPA 2.1) foi adicionada ao projeto cliente.

@@ -1,0 +1,195 @@
+1. Implementação da Nova CadastroThread no Servidor
+1.1 Atualização da CadastroThread:
+
+A nova versão da CadastroThread foi implementada para suportar os comandos de entrada (E) e saída (S) de produtos.
+
+public class CadastroThread extends Thread {
+    private ProdutoJpaController ctrlProd;
+    private UsuarioJpaController ctrlUsu;
+    private MovimentoJpaController ctrlMov;
+    private PessoaJpaController ctrlPessoa;
+    private Socket s1;
+
+    public CadastroThread(ProdutoJpaController ctrlProd, UsuarioJpaController ctrlUsu, MovimentoJpaController ctrlMov, PessoaJpaController ctrlPessoa, Socket s1) {
+        this.ctrlProd = ctrlProd;
+        this.ctrlUsu = ctrlUsu;
+        this.ctrlMov = ctrlMov;
+        this.ctrlPessoa = ctrlPessoa;
+        this.s1 = s1;
+    }
+
+    @Override
+    public void run() {
+        try (ObjectOutputStream out = new ObjectOutputStream(s1.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(s1.getInputStream())) {
+
+            String login = in.readUTF();
+            String senha = in.readUTF();
+
+            Usuario usuario = ctrlUsu.findUsuario(login, senha);
+            if (usuario == null) {
+                s1.close();
+                return;
+            }
+
+            while (true) {
+                String comando = in.readUTF();
+                if ("L".equals(comando)) {
+                    List<Produto> produtos = ctrlProd.findProdutoEntities();
+                    out.writeObject(produtos);
+                    out.flush();
+                } else if ("E".equals(comando) || "S".equals(comando)) {
+                    Movimento mov = new Movimento();
+                    mov.setUsuario(usuario);
+                    mov.setTipo(comando);
+
+                    Long idPessoa = in.readLong();
+                    Pessoa pessoa = ctrlPessoa.findPessoa(idPessoa);
+                    mov.setPessoa(pessoa);
+
+                    Long idProduto = in.readLong();
+                    Produto produto = ctrlProd.findProduto(idProduto);
+                    mov.setProduto(produto);
+
+                    int quantidade = in.readInt();
+                    mov.setQuantidade(quantidade);
+
+                    float valorUnitario = in.readFloat();
+                    mov.setValorUnitario(valorUnitario);
+
+                    ctrlMov.create(mov);
+
+                    if ("E".equals(comando)) {
+                        produto.setQuantidade(produto.getQuantidade() + quantidade);
+                    } else if ("S".equals(comando)) {
+                        produto.setQuantidade(produto.getQuantidade() - quantidade);
+                    }
+                    ctrlProd.edit(produto);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+1.2 Atualização do main para Utilizar a Nova CadastroThread:
+
+public class CadastroServer {
+    public static void main(String[] args) {
+        EntityManagerFactory emf = Persistence.createEntityManagerFactory("CadastroServerPU");
+        ProdutoJpaController ctrlProd = new ProdutoJpaController(emf);
+        UsuarioJpaController ctrlUsu = new UsuarioJpaController(emf);
+        MovimentoJpaController ctrlMov = new MovimentoJpaController(emf);
+        PessoaJpaController ctrlPessoa = new PessoaJpaController(emf);
+
+        try (ServerSocket serverSocket = new ServerSocket(4321)) {
+            while (true) {
+                Socket clientSocket = serverSocket.accept();
+                CadastroThread thread = new CadastroThread(ctrlProd, ctrlUsu, ctrlMov, ctrlPessoa, clientSocket);
+                thread.start();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+2. Implementação do Cliente Assíncrono CadastroClientV2
+2.1 Cliente com Interface de Usuário:
+
+
+public class CadastroClientV2 {
+    public static void main(String[] args) {
+        try (Socket socket = new Socket("localhost", 4321);
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
+             BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+             
+             // Login
+             out.writeUTF("op1");
+             out.writeUTF("op1");
+             out.flush();
+
+             // Setup GUI
+             SaidaFrame frame = new SaidaFrame();
+             frame.setVisible(true);
+             ThreadClient threadClient = new ThreadClient(in, frame.textArea);
+             threadClient.start();
+
+             String comando;
+             while (!(comando = reader.readLine()).equalsIgnoreCase("X")) {
+                 out.writeUTF(comando);
+                 out.flush();
+
+                 if ("E".equalsIgnoreCase(comando) || "S".equalsIgnoreCase(comando)) {
+                     System.out.print("Id da pessoa: ");
+                     out.writeUTF(reader.readLine());
+                     System.out.print("Id do produto: ");
+                     out.writeUTF(reader.readLine());
+                     System.out.print("Quantidade: ");
+                     out.writeUTF(reader.readLine());
+                     System.out.print("Valor unitário: ");
+                     out.writeUTF(reader.readLine());
+                     out.flush();
+                 }
+             }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+2.2 Implementação da Janela SaidaFrame:
+
+import javax.swing.*;
+
+public class SaidaFrame extends JDialog {
+    public JTextArea textArea;
+
+    public SaidaFrame() {
+        setBounds(100, 100, 400, 300);
+        setModal(false);
+        textArea = new JTextArea();
+        add(new JScrollPane(textArea));
+    }
+}
+
+
+2.3 Implementação da ThreadClient:
+
+public class ThreadClient extends Thread {
+    private ObjectInputStream entrada;
+    private JTextArea textArea;
+
+    public ThreadClient(ObjectInputStream entrada, JTextArea textArea) {
+        this.entrada = entrada;
+        this.textArea = textArea;
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (true) {
+                Object obj = entrada.readObject();
+                SwingUtilities.invokeLater(() -> {
+                    if (obj instanceof String) {
+                        textArea.append((String) obj + "\n");
+                    } else if (obj instanceof List) {
+                        List<Produto> produtos = (List<Produto>) obj;
+                        produtos.forEach(produto -> textArea.append(produto.getNome() + ": " + produto.getQuantidade() + "\n"));
+                    }
+                });
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+
+
